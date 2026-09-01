@@ -89,6 +89,16 @@ body {
     padding: 5px 12px;
     border-radius: 999px;
 }
+.chip-role {
+    background: rgba(255,255,255,.08);
+    color: var(--muted);
+    font-weight: 600;
+}
+.auth-toggle {
+    width: 100%;
+    margin-top: 14px;
+    text-align: center;
+}
 .btn-ghost {
     background: transparent;
     border: 1px solid var(--border);

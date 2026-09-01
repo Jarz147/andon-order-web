@@ -1,38 +1,28 @@
 // =============================================================
-// KONFIGURASI WEB ORDER / MATIKAN ANDON
-// Edit file ini sesuai broker, jalur, dan user Anda.
+// KONFIGURASI WEB ORDER / MATIKAN ANDON (Supabase + MQTT)
+// Edit file ini sesuai project Anda.
 // =============================================================
 
 const ANDON_CONFIG = {
 
-  // URL broker MQTT mode WebSocket.
-  // Broker harus diaktifkan untuk websocket (mosquitto: listener 9001 protocol websockets)
-  // Contoh: ws://192.168.210.242:9001/mqtt  atau  wss://broker.example.com:9001/mqtt
+  // ----- Supabase (auth email+password & database orderan) -----
+  supabaseUrl: 'https://ztskdjnaghcsnptwotwy.supabase.co',
+  supabaseAnonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp0c2tkam5hZ2hjc25wdHdvdHd5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5NDY0OTcsImV4cCI6MjEwMzUyMjQ5N30.qi2__Pk1yYrVYho6i6vr5eiwt5oXMsyJWKhF5wYZzKY',
+  defaultRole: 'operator',   // role default untuk akun baru
+
+  // ----- MQTT (WebSocket broker) -----
   mqttBrokerUrl: 'ws://192.168.210.242:9001/mqtt',
-  mqttUsername: '',          // kosongkan jika tanpa auth
+  mqttUsername: '',
   mqttPassword: '',
 
-  // Suffix topik untuk perintah matikan andon.
-  // Web mem-publish ke: b_{no}_{dept} + cmdSuffix  (contoh: b_7_mtc/cmd)
+  // Akhiran topik perintah matikan andon (publish ke b_{no}_{dept} + cmdSuffix)
   cmdSuffix: '/cmd',
 
-  // Jumlah jalur (line) per departemen yang dipantau.
-  // Topik status yang disubscribe: b_{no}_{dept}  (contoh: b_7_mtc)
+  // Jalur (line) yang dipantau. Topik status: b_{no}_{dept}
   lineCount: 9,
   departments: ['mtc', 'qc', 'mat'],
-  lineLabels: { 7: 'LINE 7', 8: 'LINE 8', 9: 'LINE 9' }, // label khusus, boleh dikosongkan
+  lineLabels: { 7: 'LINE 7', 8: 'LINE 8', 9: 'LINE 9' },
 
-  // ===========================================================
-  // DAFTAR USER (login identitas).
-  // PENTING: ini web statis di GitHub Pages, jadi login hanya
-  // sebagai identitas/record user, BUKAN pengamanan yang aman.
-  // ===========================================================
-  users: [
-    { id: 'U001', name: 'Budi',  pin: '1234', role: 'mtc' },
-    { id: 'U002', name: 'Siti',  pin: '1234', role: 'qc'  },
-    { id: 'U003', name: 'Andi',  pin: '1234', role: 'mat' },
-  ],
-
-  // Kirim juga nama user di payload MQTT (selain user_id)
+  // Kirim nama user juga di payload MQTT (selain user_id)
   sendUserName: true,
 };

@@ -6,6 +6,7 @@
     <title>Andon Order — Ambil Orderan & Matikan Andon</title>
     <link rel="stylesheet" href="style.css">
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
 
@@ -17,14 +18,15 @@
             <h1>ANDON ORDER</h1>
             <p>Login untuk mengambil orderan &amp; mematikan andon</p>
         </div>
-        <form id="login-form">
-            <label>Pilih User</label>
-            <select id="login-user" required></select>
-            <label>PIN</label>
-            <input id="login-pin" type="password" inputmode="numeric" placeholder="••••" required>
-            <p id="login-err" class="err hidden">PIN salah atau user tidak dikenali.</p>
-            <button type="submit">Masuk</button>
+        <form id="auth-form">
+            <label>Email</label>
+            <input id="a-email" type="email" autocomplete="email" required>
+            <label>Password</label>
+            <input id="a-pass" type="password" autocomplete="current-password" required>
+            <p id="auth-err" class="err hidden"></p>
+            <button type="submit" id="auth-submit">Masuk</button>
         </form>
+        <button id="auth-toggle" class="btn-ghost auth-toggle">Belum punya akun? Daftar</button>
     </div>
 </div>
 
@@ -38,6 +40,7 @@
         <div class="header-right">
             <span id="clock" class="clock"></span>
             <span id="user-chip" class="chip"></span>
+            <span id="user-role" class="chip chip-role"></span>
             <button id="btn-logout" class="btn-ghost">Keluar</button>
         </div>
     </header>
@@ -53,7 +56,7 @@
         <div id="lines-grid" class="grid"></div>
 
         <h2 class="section-title">Riwayat Order Saya</h2>
-        <div id="order-log" class="log"></div>
+        <div id="order-log" class="log"><div class="log-empty">Memuat…</div></div>
     </main>
 </div>
 

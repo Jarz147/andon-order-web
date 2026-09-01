@@ -1,17 +1,20 @@
-# Andon Order — Web Statis (GitHub Pages)
+# Andon Order — Web Statis (GitHub Pages + Supabase)
 
 Web statis untuk **mengambil orderan** dan **mematikan andon via MQTT**.
-Konsep: **andal andon menyala = ada orderan masuk**. Setiap user login
-(pilih user + PIN), melihat jalur mana yang andon-nya aktif, lalu menekan
-tombol **MATIKAN ANDON**. Sistem akan mem-publish perintah `off` ke broker
-MQTT beserta `user_id` siapa yang mematikan.
+Konsep: **andal andon menyala = ada orderan masuk**. Setelah login
+(email + password via **Supabase Auth**), user melihat jalur mana yang
+andon-nya aktif, lalu menekan tombol **MATIKAN ANDON**. Sistem
+mem-publish perintah `off` ke broker MQTT beserta `user_id` siapa yang
+mematikan, lalu mencatat orderan ke tabel Supabase.
 
-Karena ini web **statis di GitHub Pages** (tanpa server), maka:
+## Arsitektur
 
-- Koneksi MQTT dilakukan **langsung dari browser** lewat **WebSocket broker**.
-- Login adalah **identitas/record user** (bukan pengamanan server yang kuat).
-  PIN tersimpan di file `config.js` dan terlihat publik di repo. Gunakan
-  untuk kebutuhan internal/demo.
+```
+Browser (GitHub Pages)
+   ├─ Supabase Auth  -> login email+password
+   ├─ Supabase DB    -> profiles + andon_orders (log order)
+   └─ MQTT (WebSocket) -> subscribe status, publish perintah matikan
+```
 
 ## File
 
@@ -19,36 +22,38 @@ Karena ini web **statis di GitHub Pages** (tanpa server), maka:
 |---|---|
 | `index.html` | Struktur halaman (login + dashboard + log) |
 | `style.css` | Tampilan |
-| `config.js` | **Sesuaikan di sini** (broker, jalur, user) |
-| `app.js` | Login, koneksi MQTT, render, matikan andon |
+| `config.js` | **Sesuaikan di sini** (Supabase, broker, jalur) |
+| `app.js` | Auth Supabase, MQTT, render, matikan andon |
+| `supabase-setup.sql` | SQL untuk membuat tabel di Supabase |
 | `README.md` | Dokumentasi ini |
-
-## Cara jalankan lokal (untuk tes cepat)
-
-```bash
-# dari folder andon-order-web, misal dengan python
-python -m http.server 8080
-```
-
-Buka `http://localhost:8080`. (MQTT.js di-load dari CDN, perlu internet.)
 
 ## Cara deploy ke GitHub Pages
 
-1. Buat repo di GitHub, push folder `andon-order-web/` ini.
-2. Di repo: **Settings → Pages → Source → GitHub Actions / branch `main`**
-   (atau pilih folder `/docs` / root).
-3. Setelah publish, akses lewat `https://<user>.github.io/<repo>/`.
+1. Push isi folder ini ke repo GitHub (sudah dilakukan).
+2. Di repo: **Settings → Pages → Source → Deploy from a branch →
+   branch `main` folder `/docs`** → Save.
+3. Situs live di `https://<user>.github.io/<repo>/`.
 
-## Konfigurasi — `config.js`
+## Konfigurasi Supabase
+
+1. Buat project di https://supabase.com (free tier).
+2. Salin **Project URL** dan **anon public key** dari
+   **Project Settings → API**, lalu isi ke `config.js`
+   (`supabaseUrl`, `supabaseAnonKey`).
+3. Buka **SQL Editor** dan jalankan isi `supabase-setup.sql`
+   (membuat tabel `profiles` & `andon_orders` + policy RLS).
+4. Aktifkan **Auth → Providers → Email** (default aktif).
+5. (Opsional) Matikan konfirmasi email agar langsung login:
+   **Auth → Providers → Email → "Confirm email" = off**.
+
+## Konfigurasi MQTT — `config.js`
 
 | Key | Keterangan |
 |---|---|
-| `mqttBrokerUrl` | URL WebSocket broker, contoh `ws://192.168.210.242:9001/mqtt`. Broker **harus** diaktifkan websocket-nya. |
+| `mqttBrokerUrl` | URL WebSocket broker, contoh `ws://192.168.210.242:9001/mqtt`. Broker **harus** aktif websocket-nya. |
 | `mqttUsername` / `mqttPassword` | Auth broker (kosongkan jika tanpa auth). |
 | `cmdSuffix` | Akhiran topik perintah matikan, default `/cmd`. |
 | `lineCount`, `departments` | Jalur yang dipantau. Topik status: `b_{no}_{dept}`. |
-| `lineLabels` | Label tampilan per nomor jalur. |
-| `users` | Daftar user `{ id, name, pin, role }`. |
 | `sendUserName` | Kirim `user_name` juga di payload (selain `user_id`). |
 
 ## Protokol MQTT
@@ -64,17 +69,17 @@ Payload mengikuti sistem andon yang sudah ada:
 (contoh `b_7_mtc/cmd`) dengan payload JSON:
 
 ```json
-{ "action": "off", "user_id": "U001", "user_name": "Budi" }
+{ "action": "off", "user_id": "<supabase-uid>", "user_email": "a@b.c", "user_name": "Budi" }
 ```
 
 > **Firmware/hardware andon** harus mensubscribe topik `+/cmd` ini dan
 > mematikan andon saat menerima `{"action":"off"}`, agar tombol di web
 > benar-benar mematikan lampu/andal fisik.
 
-## Topik status vs topik command
+## Keamanan
 
-Web memisahkan topik status (`b_N_dept`) dan topik perintah
-(`b_N_dept/cmd`) agar perintah yang di-publish web **tidak ikut terbaca
-sebagai status** (menghindari echo/lup balik). Publish ke `/cmd` tidak
-berubah status lokal sampai broker/firmware mem-publish balik `close` ke
-topik status.
+- Supabase menangani autentikasi (password tersimpan aman di server).
+- RLS (Row Level Security) membuat user hanya bisa melihat/menambah
+  data miliknya sendiri.
+- Anon key aman dipakai di web statis; keamanan dipegang oleh RLS,
+  bukan dengan menyembunyikan anon key.

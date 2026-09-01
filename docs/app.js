@@ -1,111 +1,112 @@
 /* =============================================================
-   APP: Login + Monitor Andon + Matikan Andon via MQTT WebSocket
+   APP: Login (Supabase) + Monitor Andon + Matikan Andon (MQTT WS)
    ============================================================= */
 
 (function () {
     'use strict';
 
     const C = ANDON_CONFIG;
-    const LS_USER = 'andonOrder.user';
-    const LS_TAKEN = 'andonOrder.taken';      // { key: {userId, at} }
-    const LS_LOG   = 'andonOrder.log';        // array log order
+    const supabase = window.supabase.createClient(C.supabaseUrl, C.supabaseAnonKey);
 
     // ---------- Bangun daftar jalur ----------
     const lines = [];
     const lineLabels = {};
-    const buildLines = () => {
-        lines.length = 0;
-        for (const dept of C.departments) {
-            for (let n = 1; n <= C.lineCount; n++) {
-                const key = `${n}:${dept}`;
-                const label = (C.lineLabels && C.lineLabels[n]) || `LINE ${n}`;
-                lineLabels[key] = label;
-                lines.push({ n, dept, key, label });
-            }
+    for (const dept of C.departments) {
+        for (let n = 1; n <= C.lineCount; n++) {
+            const key = `${n}:${dept}`;
+            lineLabels[key] = (C.lineLabels && C.lineLabels[n]) || `LINE ${n}`;
+            lines.push({ n, dept, key, label: lineLabels[key] });
         }
-    };
-    buildLines();
+    }
 
     const statusTopic = (n, dept) => `b_${n}_${dept}`;
     const cmdTopic    = (n, dept) => `b_${n}_${dept}${C.cmdSuffix}`;
 
     // ---------- State ----------
     let state = {};        // key -> { on, takenBy, takenAt }
-    let client = null;
-    let currentUser = null;
+    let client = null;     // mqtt
+    let currentUser = null; // { id, email, name, role }
 
     const $ = (id) => document.getElementById(id);
 
     // =========================================================
-    // STORAGE helpers
+    // AUTH (Supabase)
     // =========================================================
-    const load = (k, fb) => { try { return JSON.parse(localStorage.getItem(k)) ?? fb; } catch { return fb; } };
-    const save = (k, v) => localStorage.setItem(k, JSON.stringify(v));
+    let isRegisterMode = false;
 
-    const logStore = () => load(LS_LOG, []);
-    const pushLog = (entry) => {
-        const list = logStore();
-        list.unshift(entry);
-        save(LS_LOG, list.slice(0, 100));
-    };
-    const takenStore = () => load(LS_TAKEN, {});
-    const setTaken = (key, userId) => {
-        const t = takenStore();
-        t[key] = { userId, at: Date.now() };
-        save(LS_TAKEN, t);
-    };
-    const clearTaken = (key) => {
-        const t = takenStore();
-        if (t[key]) { delete t[key]; save(LS_TAKEN, t); }
+    const setAuthMode = (reg) => {
+        isRegisterMode = reg;
+        $('auth-submit').textContent = reg ? 'Daftar' : 'Masuk';
+        $('auth-toggle').textContent = reg ? 'Sudah punya akun? Masuk' : 'Belum punya akun? Daftar';
+        $('auth-err').classList.add('hidden');
     };
 
-    // =========================================================
-    // LOGIN
-    // =========================================================
-    const initLogin = () => {
-        const sel = $('login-user');
-        sel.innerHTML = '';
-        C.users.forEach(u => {
-            const opt = document.createElement('option');
-            opt.value = u.id;
-            opt.textContent = `${u.id} — ${u.name}`;
-            sel.appendChild(opt);
-        });
-        $('login-form').addEventListener('submit', (e) => {
-            e.preventDefault();
-            const id = sel.value;
-            const pin = $('login-pin').value;
-            const u = C.users.find(x => x.id === id && x.pin === pin);
-            if (!u) { $('login-err').classList.remove('hidden'); return; }
-            $('login-err').classList.add('hidden');
-            doLogin(u);
-        });
+    const loadProfile = async (user) => {
+        const { data } = await supabase
+            .from('profiles')
+            .select('id, name, role')
+            .eq('id', user.id)
+            .maybeSingle();
+        if (data) return { id: user.id, email: user.email, name: data.name, role: data.role };
+        // buat profil default bila belum ada
+        const name = (user.email || 'user').split('@')[0];
+        await supabase.from('profiles').insert({ id: user.id, name, role: C.defaultRole });
+        return { id: user.id, email: user.email, name, role: C.defaultRole };
     };
 
-    const doLogin = (u) => {
-        currentUser = u;
-        save(LS_USER, { id: u.id, name: u.name });
-        $('user-chip').textContent = `${u.id} · ${u.name}`;
+    const doLogin = async (email, password) => {
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        currentUser = await loadProfile(data.user);
+        enterApp();
+    };
+
+    const doRegister = async (email, password) => {
+        const { data, error } = await supabase.auth.signUp({ email, password });
+        if (error) throw error;
+        if (data.user && data.user.identities && data.user.identities.length === 0) {
+            throw new Error('Pendaftaran perlu konfirmasi email. Cek inbox Anda.');
+        }
+        await doLogin(email, password);
+    };
+
+    const submitAuth = async () => {
+        const email = $('a-email').value.trim();
+        const pass = $('a-pass').value;
+        $('auth-err').classList.add('hidden');
+        try {
+            if (isRegisterMode) await doRegister(email, pass);
+            else await doLogin(email, pass);
+        } catch (e) {
+            $('auth-err').textContent = e.message || 'Gagal masuk.';
+            $('auth-err').classList.remove('hidden');
+        }
+    };
+
+    const enterApp = () => {
+        $('user-chip').textContent = currentUser.name;
+        $('user-role').textContent = (currentUser.role || '').toUpperCase();
         showView('main');
         render();
+        renderLog();
         connectMqtt();
     };
 
-    const doLogout = () => {
-        localStorage.removeItem(LS_USER);
+    const doLogout = async () => {
+        await supabase.auth.signOut();
         currentUser = null;
         disconnectMqtt();
         showView('login');
-        $('login-pin').value = '';
+        $('a-pass').value = '';
+        setAuthMode(false);
     };
 
-    const tryRestore = () => {
-        const saved = load(LS_USER, null);
-        if (saved && C.users.find(x => x.id === saved.id)) {
-            doLogin({ ...saved });
-            return true;
-        }
-        return false;
+    const tryRestore = async () => {
+        const { data } = await supabase.auth.getUser();
+        if (!data.user) return false;
+        currentUser = await loadProfile(data.user);
+        enterApp();
+        return true;
     };
 
     const showView = (v) => {
@@ -125,7 +126,7 @@
     const connectMqtt = () => {
         if (!currentUser) return;
         setConn(false, 'MENGHUBUNGKAN…');
-        const opts = { clientId: C.mqttClientId || ('andon-' + Math.random().toString(16).slice(2, 8)) };
+        const opts = { clientId: 'andon-' + Math.random().toString(16).slice(2, 8) };
         if (C.mqttUsername) { opts.username = C.mqttUsername; opts.password = C.mqttPassword; }
 
         try {
@@ -154,22 +155,18 @@
     const handleMessage = (topic, payload) => {
         const msg = payload.toString();
         const m = topic.match(/^b_(\d+)_(mtc|qc|mat)$/);
-        if (!m) return; // abaikan topik command (echo)
+        if (!m) return;
         const key = `${m[1]}:${m[2]}`;
-        const on = parseOn(msg);
-
         const st = state[key] || { on: false, takenBy: null, takenAt: null };
+        const on = parseOn(msg);
         if (on && !st.on) {
-            // andon baru menyala -> orderan masuk, kosongkan penanda
-            const t = takenStore()[key];
             st.on = true;
-            st.takenBy = t ? t.userId : null;
-            st.takenAt = t ? t.at : null;
+            st.takenBy = null;
+            st.takenAt = null;
         } else if (!on) {
             st.on = false;
             st.takenBy = null;
             st.takenAt = null;
-            clearTaken(key);
         }
         state[key] = st;
         render();
@@ -188,31 +185,51 @@
     };
 
     // =========================================================
-    // MATIKAN ANDON (publish MQTT + catat order)
+    // MATIKAN ANDON (publish MQTT + catat order di Supabase)
     // =========================================================
-    const turnOff = (l) => {
+    const turnOff = async (l) => {
         if (!currentUser || !client || !client.connected) {
             alert('MQTT belum terhubung. Periksa koneksi broker.');
             return;
         }
-        const payload = { action: 'off', user_id: currentUser.id };
+        const payload = { action: 'off', user_id: currentUser.id, user_email: currentUser.email };
         if (C.sendUserName) payload.user_name = currentUser.name;
 
         client.publish(cmdTopic(l.n, l.dept), JSON.stringify(payload));
 
-        // tandai diambil oleh user ini
         state[l.key] = { ...state[l.key], on: true, takenBy: currentUser.id, takenAt: Date.now() };
-        setTaken(l.key, currentUser.id);
 
-        pushLog({
+        await supabase.from('andon_orders').insert({
+            user_id: currentUser.id,
+            user_email: currentUser.email,
+            user_name: currentUser.name,
             line: l.label,
             dept: l.dept.toUpperCase(),
-            key: l.key,
-            userId: currentUser.id,
-            userName: currentUser.name,
-            at: Date.now(),
         });
+
         render();
+        renderLog();
+    };
+
+    // =========================================================
+    // ORDER LOG (Supabase)
+    // =========================================================
+    const renderLog = async () => {
+        const box = $('order-log');
+        const { data, error } = await supabase
+            .from('andon_orders')
+            .select('id, line, dept, user_name, created_at')
+            .eq('user_id', currentUser.id)
+            .order('created_at', { ascending: false })
+            .limit(50);
+        if (error) { box.innerHTML = `<div class="log-empty">Gagal memuat riwayat.</div>`; return; }
+        if (!data.length) { box.innerHTML = `<div class="log-empty">Belum ada order yang diambil.</div>`; return; }
+        box.innerHTML = data.map(e => `
+            <div class="log-item">
+                <span><b>${e.line} ${e.dept}</b> — dimatikan oleh ${e.user_name}</span>
+                <span class="when">${new Date(e.created_at).toLocaleString('id-ID')}</span>
+            </div>
+        `).join('');
     };
 
     // =========================================================
@@ -221,7 +238,6 @@
     const render = () => {
         renderLines();
         renderStats();
-        renderLog();
     };
 
     const renderLines = () => {
@@ -236,11 +252,8 @@
 
             let body;
             if (st.on) {
-                const takenUser = st.takenBy ? C.users.find(u => u.id === st.takenBy) : null;
                 if (st.takenBy && st.takenBy === currentUser.id) {
                     body = `<div class="taken">DIMATIKAN ✓ oleh Anda</div>`;
-                } else if (st.takenBy && takenUser) {
-                    body = `<div class="taken">Diambil oleh ${takenUser.name}</div>`;
                 } else {
                     body = `<button class="btn-off" data-key="${l.key}">MATIKAN ANDON</button>`;
                 }
@@ -254,7 +267,7 @@
                     <span class="card-dept" style="color:${deptColor}">${l.dept.toUpperCase()}</span>
                 </div>
                 <div class="lamp ${st.on ? 'on' : ''}">${st.on ? 'ANDON AKTIF' : 'STANDBY'}</div>
-                ${st.on && !st.takenBy ? `<div class="order-meta">Orderan masuk di <b>${l.label} ${l.dept.toUpperCase()}</b></div>` : ''}
+                ${st.on ? `<div class="order-meta">Orderan masuk di <b>${l.label} ${l.dept.toUpperCase()}</b></div>` : ''}
                 ${body}
             `;
             grid.appendChild(card);
@@ -273,23 +286,6 @@
         const act = lines.filter(l => state[l.key] && state[l.key].on).length;
         $('stat-active').textContent = act;
         $('stat-total').textContent = lines.length;
-        const mine = logStore().filter(e => e.userId === currentUser.id).length;
-        $('stat-my').textContent = mine;
-    };
-
-    const renderLog = () => {
-        const box = $('order-log');
-        const list = logStore().filter(e => e.userId === currentUser.id);
-        if (!list.length) {
-            box.innerHTML = `<div class="log-empty">Belum ada order yang diambil.</div>`;
-            return;
-        }
-        box.innerHTML = list.map(e => `
-            <div class="log-item">
-                <span><b>${e.line} ${e.dept}</b> — dimatikan oleh ${e.userName}</span>
-                <span class="when">${new Date(e.at).toLocaleString('id-ID')}</span>
-            </div>
-        `).join('');
     };
 
     // =========================================================
@@ -305,10 +301,11 @@
     // INIT
     // =========================================================
     document.addEventListener('DOMContentLoaded', () => {
-        initLogin();
+        $('auth-form').addEventListener('submit', (e) => { e.preventDefault(); submitAuth(); });
+        $('auth-toggle').addEventListener('click', () => setAuthMode(!isRegisterMode));
         $('btn-logout').addEventListener('click', doLogout);
         updateClock();
         setInterval(updateClock, 1000);
-        if (!tryRestore()) showView('login');
+        tryRestore();
     });
 })();
