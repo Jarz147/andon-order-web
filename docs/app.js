@@ -306,6 +306,8 @@
         $('btn-logout').addEventListener('click', doLogout);
         updateClock();
         setInterval(updateClock, 1000);
-        tryRestore();
+        tryRestore().then(restored => {
+            if (!restored) showView('login');
+        });
     });
 })();
