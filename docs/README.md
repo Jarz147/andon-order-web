@@ -1,85 +1,90 @@
-# Andon Order — Web Statis (GitHub Pages + Supabase)
+# Andon Order — Web (GitHub Pages + Supabase + Relay Node-RED)
 
-Web statis untuk **mengambil orderan** dan **mematikan andon via MQTT**.
-Konsep: **andal andon menyala = ada orderan masuk**. Setelah login
-(email + password via **Supabase Auth**), user melihat jalur mana yang
-andon-nya aktif, lalu menekan tombol **MATIKAN ANDON**. Sistem
-mem-publish perintah `off` ke broker MQTT beserta `user_id` siapa yang
-mematikan, lalu mencatat orderan ke tabel Supabase.
+Web untuk **mengambil orderan** dan **mematikan andon**. Konsep:
+**andal andon menyala = ada orderan masuk**. Setelah login (email + password
+via **Supabase Auth**), user melihat jalur mana yang aktif, lalu menekan
+tombol **MATIKAN ANDON**. `user_id` pengirim dikirim lewat MQTT sebagai
+jejak audit, dan orderan dicatat ke Supabase.
+
+## Kenapa bukan MQTT langsung dari browser?
+
+Halaman GitHub Pages diakses via **https** dan berada di internet, sedangkan
+broker ada di **LAN lokal** (`192.168.137.188`). Browser tidak bisa menyambung
+ke IP privat / `ws://`. Solusi mengikuti pola yang sudah dipakai di web lain
+(scissor-lift): **relay melalui Edge Function + tunnel + Node-RED**.
 
 ## Arsitektur
 
 ```
-Browser (GitHub Pages)
-   ├─ Supabase Auth  -> login email+password
-   ├─ Supabase DB    -> profiles + andon_orders (log order)
-   └─ MQTT (WebSocket) -> subscribe status, publish perintah matikan
+BROWSER (GitHub Pages)
+  │ login → Supabase Auth
+  │ baca status → Supabase Realtime (tabel andon_status)
+  ▼
+  klik "Matikan Andon"
+     → Edge Function andon-publish   (cloud)
+        ├─ catat ke tabel andon_orders
+        └─ HTTP → tunnel (localtunnel) → Node-RED /andon/cmd
+                 → MQTT publish b_{no}_{dept}/cmd  (user_id) → EMQX → firmware
+
+LAN
+  Node-RED subscribe b_#  →  Edge Function andon-status (cloud)
+        └─ upsert tabel andon_status  → Realtime → browser
 ```
 
-## File
+## Komponen yang harus disiapkan
 
-| File | Isi |
-|---|---|
-| `index.html` | Struktur halaman (login + dashboard + log) |
-| `style.css` | Tampilan |
-| `config.js` | **Sesuaikan di sini** (Supabase, broker, jalur) |
-| `app.js` | Auth Supabase, MQTT, render, matikan andon |
-| `supabase-setup.sql` | SQL untuk membuat tabel di Supabase |
-| `README.md` | Dokumentasi ini |
+### 1. Supabase (cloud)
+- Buat project, isi `supabaseUrl` / `supabaseAnonKey` di `config.js`.
+- Jalankan `supabase-setup.sql` di **SQL Editor** (tabel `profiles`,
+  `andon_orders`, `andon_status` + RLS).
+- Matikan "Confirm email" di **Authentication → Providers → Email**.
+- Deploy **2 Edge Functions**:
+  - `andon-publish` (folder `supabase/functions/andon-publish`)
+  - `andon-status` (folder `supabase/functions/andon-status`)
+  - Cara: `npx supabase login`, `npx supabase link --project-ref <ref>`,
+    `npx supabase functions deploy andon-publish`,
+    `npx supabase functions deploy andon-status`.
+- Set **secrets** di Edge Functions (**Project Settings → Edge Functions →
+  Secrets** atau lewat `npx supabase secrets set`):
+  - `NODERED_URL`   = URL tunnel, contoh `https://quiet-dodos-argue.loca.lt`
+  - `NODERED_TOKEN` = token bersama, contoh `SDI_RELAY_TOKEN`
 
-## Cara deploy ke GitHub Pages
+> `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` otomatis
+> tersedia di Edge Function tanpa diset manual.
 
-1. Push isi folder ini ke repo GitHub (sudah dilakukan).
-2. Di repo: **Settings → Pages → Source → Deploy from a branch →
-   branch `main` folder `/docs`** → Save.
-3. Situs live di `https://<user>.github.io/<repo>/`.
+### 2. Tunnel (LAN → publik) — untuk perintah ke broker
+Jalankan di mesin LAN yang ada Node-RED:
+```
+npx -y localtunnel --port 1881 --local-host 192.168.137.188
+```
+Catat URL publiknya (mis. `https://quiet-dodos-argue.loca.lt`) → isi ke
+secret `NODERED_URL`.
 
-## Konfigurasi Supabase
+### 3. Node-RED (LAN)
+- Import `nodered-andon-flow.json` (Menu → Import).
+- Ubah nilai `TOKEN` di node function `fn-cmd` & `fn-status` menjadi token
+  bersama (sama dengan `NODERED_TOKEN` di Supabase).
+- Pastikan node MQTT broker tersambung ke EMQX (`192.168.137.188:1883`).
+- Deploy.
 
-1. Buat project di https://supabase.com (free tier).
-2. Salin **Project URL** dan **anon public key** dari
-   **Project Settings → API**, lalu isi ke `config.js`
-   (`supabaseUrl`, `supabaseAnonKey`).
-3. Buka **SQL Editor** dan jalankan isi `supabase-setup.sql`
-   (membuat tabel `profiles` & `andon_orders` + policy RLS).
-4. Aktifkan **Auth → Providers → Email** (default aktif).
-5. (Opsional) Matikan konfirmasi email agar langsung login:
-   **Auth → Providers → Email → "Confirm email" = off**.
-
-## Konfigurasi MQTT — `config.js`
-
-| Key | Keterangan |
-|---|---|
-| `mqttBrokerUrl` | URL WebSocket broker, contoh `ws://192.168.210.242:9001/mqtt`. Broker **harus** aktif websocket-nya. |
-| `mqttUsername` / `mqttPassword` | Auth broker (kosongkan jika tanpa auth). |
-| `cmdSuffix` | Akhiran topik perintah matikan, default `/cmd`. |
-| `lineCount`, `departments` | Jalur yang dipantau. Topik status: `b_{no}_{dept}`. |
-| `sendUserName` | Kirim `user_name` juga di payload (selain `user_id`). |
+### 4. EMQX (broker)
+Tidak perlu diubah — tetap menerima MQTT dari Node-RED & firmware.
 
 ## Protokol MQTT
 
-**Subscribe (status andon):** topik `b_{no}_{dept}` (contoh `b_7_mtc`).
-Payload mengikuti sistem andon yang sudah ada:
+**Status andon** (firmware → broker): topik `b_{no}_{dept}` (mis. `b_7_mtc`),
+payload `open` (aktif) / `close` (mati).
 
-- `open` → andon **aktif** (orderan masuk)
-- `close` → andon **mati**
-- atau boolean `true/false`, `1/0`, atau JSON `{"data_payload":"open"}`
-
-**Publish (matikan andon):** topik `b_{no}_{dept} + cmdSuffix`
-(contoh `b_7_mtc/cmd`) dengan payload JSON:
-
+**Perintah matikan** (Node-RED → broker): topik `b_{no}_{dept}/cmd`, payload:
 ```json
-{ "action": "off", "user_id": "<supabase-uid>", "user_email": "a@b.c", "user_name": "Budi" }
+{ "action": "off", "user_id": "<supabase-uid>", "user_email": "a@b.c", "user_name": "Budi", "line": "LINE 7", "dept": "mtc" }
 ```
 
-> **Firmware/hardware andon** harus mensubscribe topik `+/cmd` ini dan
-> mematikan andon saat menerima `{"action":"off"}`, agar tombol di web
-> benar-benar mematikan lampu/andal fisik.
+> Firmware harus subscribe `+/cmd` dan mematikan andon saat menerima
+> `{"action":"off"}`.
 
-## Keamanan
-
-- Supabase menangani autentikasi (password tersimpan aman di server).
-- RLS (Row Level Security) membuat user hanya bisa melihat/menambah
-  data miliknya sendiri.
-- Anon key aman dipakai di web statis; keamanan dipegang oleh RLS,
-  bukan dengan menyembunyikan anon key.
+## Sekuritas
+- Auth ditangani Supabase; RLS membatasi akses data per user.
+- Token `NODERED_TOKEN` dipakai bersama antara Supabase & Node-RED untuk
+  memvalidasi relay.
+- Anon key aman di web statis; keamanan dipegang RLS.

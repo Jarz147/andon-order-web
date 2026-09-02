@@ -1,5 +1,9 @@
 /* =============================================================
-   APP: Login (Supabase) + Monitor Andon + Matikan Andon (MQTT WS)
+   APP: Login (Supabase) + Monitor Andon (Realtime) + Matikan Andon
+   Browser TIDAK terhubung MQTT langsung.
+   - Status andon dibaca dari tabel andon_status via Supabase Realtime
+   - Perintah "Matikan Andon" lewat Edge Function andon-publish
+     -> tunnel -> Node-RED -> MQTT (user_id dikirim di payload)
    ============================================================= */
 
 (function () {
@@ -19,13 +23,9 @@
         }
     }
 
-    const statusTopic = (n, dept) => `b_${n}_${dept}`;
-    const cmdTopic    = (n, dept) => `b_${n}_${dept}${C.cmdSuffix}`;
-
-    // ---------- State ----------
-    let state = {};        // key -> { on, takenBy, takenAt }
-    let client = null;     // mqtt
+    let state = {};         // key -> { on, takenBy }
     let currentUser = null; // { id, email, name, role }
+    let channel = null;
 
     const $ = (id) => document.getElementById(id);
 
@@ -48,7 +48,6 @@
             .eq('id', user.id)
             .maybeSingle();
         if (data) return { id: user.id, email: user.email, name: data.name, role: data.role };
-        // buat profil default bila belum ada
         const name = (user.email || 'user').split('@')[0];
         await supabase.from('profiles').insert({ id: user.id, name, role: C.defaultRole });
         return { id: user.id, email: user.email, name, role: C.defaultRole };
@@ -89,13 +88,13 @@
         showView('main');
         render();
         renderLog();
-        connectMqtt();
+        subscribeStatus();
     };
 
     const doLogout = async () => {
         await supabase.auth.signOut();
+        if (channel) { try { supabase.removeChannel(channel); } catch {} channel = null; }
         currentUser = null;
-        disconnectMqtt();
         showView('login');
         $('a-pass').value = '';
         setAuthMode(false);
@@ -115,98 +114,45 @@
     };
 
     // =========================================================
-    // MQTT
+    // STATUS via Supabase Realtime
     // =========================================================
-    const setConn = (ok, text) => {
-        const el = $('conn');
-        el.className = 'badge ' + (ok ? 'badge-on' : 'badge-off');
-        el.textContent = text || (ok ? 'TERHUBUNG' : 'TERPUTUS');
-    };
-
-    const connectMqtt = () => {
-        if (!currentUser) return;
-        setConn(false, 'MENGHUBUNGKAN…');
-        const opts = { clientId: 'andon-' + Math.random().toString(16).slice(2, 8) };
-        if (C.mqttUsername) { opts.username = C.mqttUsername; opts.password = C.mqttPassword; }
-
-        try {
-            client = mqtt.connect(C.mqttBrokerUrl, opts);
-        } catch (e) {
-            setConn(false, 'GAGAL TERHUBUNG');
-            console.error(e);
-            return;
-        }
-
-        client.on('connect', () => {
-            setConn(true, 'TERHUBUNG');
-            lines.forEach(l => client.subscribe(statusTopic(l.n, l.dept)));
-        });
-        client.on('message', (topic, payload) => handleMessage(topic, payload));
-        client.on('close', () => setConn(false, 'TERPUTUS'));
-        client.on('error', (e) => { setConn(false, 'ERROR'); console.error(e); });
-        client.on('reconnect', () => setConn(false, 'MENYAMBUNG ULANG…'));
-    };
-
-    const disconnectMqtt = () => {
-        if (client) { try { client.end(true); } catch {} client = null; }
-        setConn(false, 'KONEKSI…');
-    };
-
-    const handleMessage = (topic, payload) => {
-        const msg = payload.toString();
-        const m = topic.match(/^b_(\d+)_(mtc|qc|mat)$/);
-        if (!m) return;
-        const key = `${m[1]}:${m[2]}`;
-        const st = state[key] || { on: false, takenBy: null, takenAt: null };
-        const on = parseOn(msg);
-        if (on && !st.on) {
-            st.on = true;
-            st.takenBy = null;
-            st.takenAt = null;
-        } else if (!on) {
-            st.on = false;
-            st.takenBy = null;
-            st.takenAt = null;
-        }
-        state[key] = st;
+    const applyStatus = (row) => {
+        if (!row || !row.key) return;
+        state[row.key] = { ...(state[row.key] || {}), on: !!row.is_on, line: row.line, dept: row.dept };
         render();
     };
 
-    const parseOn = (msg) => {
-        const s = String(msg).trim().toLowerCase();
-        if (s === 'open') return true;
-        if (s === 'close') return false;
-        try {
-            const d = JSON.parse(s);
-            if (d && typeof d === 'object' && 'data_payload' in d) return d.data_payload === 'open';
-        } catch {}
-        const v = s === 'true' ? true : Number(s);
-        return v === true || v === 1 || v === '1';
+    const loadStatus = async () => {
+        const { data } = await supabase.from('andon_status').select('*');
+        (data || []).forEach(applyStatus);
+    };
+
+    const subscribeStatus = () => {
+        loadStatus();
+        channel = supabase
+            .channel('andon-status-realtime')
+            .on('postgres_changes',
+                { event: '*', schema: 'public', table: 'andon_status' },
+                (payload) => {
+                    if (payload.new) applyStatus(payload.new);
+                })
+            .subscribe();
     };
 
     // =========================================================
-    // MATIKAN ANDON (publish MQTT + catat order di Supabase)
+    // MATIKAN ANDON (via Edge Function andon-publish)
     // =========================================================
     const turnOff = async (l) => {
-        if (!currentUser || !client || !client.connected) {
-            alert('MQTT belum terhubung. Periksa koneksi broker.');
+        if (!currentUser) return;
+        const { data, error } = await supabase.functions.invoke(C.fnPublish, {
+            body: { no: l.n, dept: l.dept },
+        });
+        if (error) {
+            alert('Gagal mengirim perintah: ' + (error.message || ''));
             return;
         }
-        const payload = { action: 'off', user_id: currentUser.id, user_email: currentUser.email };
-        if (C.sendUserName) payload.user_name = currentUser.name;
-
-        client.publish(cmdTopic(l.n, l.dept), JSON.stringify(payload));
-
-        state[l.key] = { ...state[l.key], on: true, takenBy: currentUser.id, takenAt: Date.now() };
-
-        await supabase.from('andon_orders').insert({
-            user_id: currentUser.id,
-            user_email: currentUser.email,
-            user_name: currentUser.name,
-            line: l.label,
-            dept: l.dept.toUpperCase(),
-        });
-
+        // optimis: tandai diambil & mati, Realtime akan menyesuaikan
+        state[l.key] = { ...state[l.key], on: false, takenBy: currentUser.id };
         render();
         renderLog();
     };
@@ -252,11 +198,7 @@
 
             let body;
             if (st.on) {
-                if (st.takenBy && st.takenBy === currentUser.id) {
-                    body = `<div class="taken">DIMATIKAN ✓ oleh Anda</div>`;
-                } else {
-                    body = `<button class="btn-off" data-key="${l.key}">MATIKAN ANDON</button>`;
-                }
+                body = `<button class="btn-off" data-key="${l.key}">MATIKAN ANDON</button>`;
             } else {
                 body = `<div class="lamp">STANDBY</div>`;
             }

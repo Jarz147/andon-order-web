@@ -1,0 +1,97 @@
+[
+  {
+    "id": "andon-broker",
+    "type": "mqtt-broker",
+    "name": "EMQX Lokal",
+    "broker": "192.168.137.188",
+    "port": "1883",
+    "clientid": "nodered_andon",
+    "usetls": false,
+    "protocol": "mqtt",
+    "keepalive": "60",
+    "cleansession": true,
+    "username": "sdi4.0",
+    "password": "Sankei2017",
+    "will": { "topic": "", "payload": "", "qos": "0", "retain": "false" }
+  },
+
+  {
+    "id": "http-cmd",
+    "type": "http in",
+    "name": "HTTP /andon/cmd (dari Edge Function)",
+    "url": "/andon/cmd",
+    "method": "post",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 120,
+    "y": 120,
+    "wires": [["fn-cmd"]]
+  },
+  {
+    "id": "fn-cmd",
+    "type": "function",
+    "name": "Validasi token & teruskan ke MQTT",
+    "func": "const token = msg.headers && (msg.headers['x-nodered-token'] || msg.headers['X-Nodered-Token']);\nconst TOKEN = 'SDI_RELAY_TOKEN'; // sesuaikan dengan NODERED_TOKEN di Supabase\nif (token !== TOKEN) {\n  const bad = { statusCode: 403, payload: { error: 'forbidden' } };\n  return [null, bad];\n}\nconst body = msg.payload || {};\nmsg.topic = body.topic;\nmsg.payload = body.payload;\nmsg.qos = 1;\nreturn [msg, null];",
+    "outputs": 2,
+    "x": 320,
+    "y": 120,
+    "wires": [["mqtt-cmd"], ["http-cmd-resp"]]
+  },
+  {
+    "id": "mqtt-cmd",
+    "type": "mqtt out",
+    "name": "MQTT publish b_N_dept/cmd",
+    "server": "andon-broker",
+    "topic": "",
+    "qos": "1",
+    "retain": "false",
+    "x": 520,
+    "y": 120,
+    "wires": []
+  },
+  {
+    "id": "http-cmd-resp",
+    "type": "http response",
+    "name": "Resp (403)",
+    "statusCode": "403",
+    "x": 520,
+    "y": 200,
+    "wires": []
+  },
+
+  {
+    "id": "mqtt-status",
+    "type": "mqtt in",
+    "name": "Subscribe status andon b_#",
+    "server": "andon-broker",
+    "topic": "b_#",
+    "qos": "0",
+    "datatype": "utf8",
+    "x": 120,
+    "y": 300,
+    "wires": [["fn-status"]]
+  },
+  {
+    "id": "fn-status",
+    "type": "function",
+    "name": "Parse status & kirim ke Supabase",
+    "func": "// abaikan topik perintah (b_N_dept/cmd)\nconst m = /^b_(\\d+)_(mtc|qc|mat)$/.exec(msg.topic || '');\nif (!m) return null;\n\nconst no = Number(m[1]);\nconst dept = m[2];\nconst ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp0c2tkam5hZ2hjc25wdHdvdHd5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5NDY0OTcsImV4cCI6MjEwMzUyMjQ5N30.qi2__Pk1yYrVYho6i6vr5eiwt5oXMsyJWKhF5wYZzKY';\nconst TOKEN = 'SDI_RELAY_TOKEN'; // sama dengan NODERED_TOKEN di Supabase\n\nmsg.url = 'https://ztskdjnaghcsnptwotwy.supabase.co/functions/v1/andon-status';\nmsg.method = 'POST';\nmsg.headers = {\n  'content-type': 'application/json',\n  'x-nodered-token': TOKEN\n};\nmsg.payload = {\n  key: no + ':' + dept,\n  line: 'LINE ' + no,\n  dept: dept,\n  is_on: String(msg.payload || '').trim().toLowerCase() === 'open'\n};\nreturn msg;",
+    "outputs": 1,
+    "x": 320,
+    "y": 300,
+    "wires": [["http-status"]]
+  },
+  {
+    "id": "http-status",
+    "type": "http request",
+    "name": "POST andon-status (Supabase Edge Function)",
+    "method": "POST",
+    "ret": "txt",
+    "url": "",
+    "tls": "",
+    "follow-redirects": true,
+    "x": 520,
+    "y": 300,
+    "wires": []
+  }
+]

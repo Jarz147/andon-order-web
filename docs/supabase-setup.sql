@@ -40,3 +40,25 @@ create policy "orders insert own" on public.andon_orders
 
 create policy "orders select own" on public.andon_orders
   for select using (auth.uid() = user_id);
+
+-- 3) ANDON_STATUS: status andon per jalur, dibaca browser via Realtime.
+--    Ditulis oleh Edge Function andon-status (dipanggil Node-RED / LAN).
+create table if not exists public.andon_status (
+  key text primary key,                 -- '7:mtc'
+  line text,                            -- 'LINE 7'
+  dept text,                            -- 'mtc'
+  is_on boolean default false,
+  updated_at timestamptz default now()
+);
+
+alter table public.andon_status enable row level security;
+
+create policy "status select auth" on public.andon_status
+  for select using (auth.role() = 'authenticated');
+
+-- Beri akses baca (realtime) untuk peran anon agar table editor mudah dilihat (opsional).
+create policy "status select anon" on public.andon_status
+  for select using (auth.role() = 'anon');
+
+-- Agar Realtime meneruskan event UPDATE ke browser:
+alter table public.andon_status replica identity full;
