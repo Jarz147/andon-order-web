@@ -11,7 +11,7 @@ const ANDON_CONFIG = {
   defaultRole: 'operator',   // role default untuk akun baru
 
   // ----- MQTT (WebSocket broker) -----
-  mqttBrokerUrl: 'ws://192.168.210.242:9001/mqtt',
+  mqttBrokerUrl: 'ws://192.168.137.188:8083/mqtt',
   mqttUsername: '',
   mqttPassword: '',
 
