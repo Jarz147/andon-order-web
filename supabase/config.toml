@@ -1,0 +1,7 @@
+project_id = "andon-order"
+
+[functions.andon-publish]
+verify_jwt = true
+
+[functions.andon-status]
+verify_jwt = false

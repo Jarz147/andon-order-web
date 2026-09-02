@@ -38,16 +38,18 @@ LAN
 - Jalankan `supabase-setup.sql` di **SQL Editor** (tabel `profiles`,
   `andon_orders`, `andon_status` + RLS).
 - Matikan "Confirm email" di **Authentication → Providers → Email**.
-- Deploy **2 Edge Functions**:
-  - `andon-publish` (folder `supabase/functions/andon-publish`)
-  - `andon-status` (folder `supabase/functions/andon-status`)
-  - Cara: `npx supabase login`, `npx supabase link --project-ref <ref>`,
+- Deploy **2 Edge Functions** (folder `supabase/functions/`):
+  - `andon-publish`
+  - `andon-status`
+  - Dari folder repo: `npx supabase login`, lalu
+    `npx supabase link --project-ref ztskdjnaghcsnptwotwy`,
     `npx supabase functions deploy andon-publish`,
     `npx supabase functions deploy andon-status`.
 - Set **secrets** di Edge Functions (**Project Settings → Edge Functions →
   Secrets** atau lewat `npx supabase secrets set`):
   - `NODERED_URL`   = URL tunnel, contoh `https://quiet-dodos-argue.loca.lt`
   - `NODERED_TOKEN` = token bersama, contoh `SDI_RELAY_TOKEN`
+  - Cara: `npx supabase secrets set NODERED_URL=<url> NODERED_TOKEN=<token>`
 
 > `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` otomatis
 > tersedia di Edge Function tanpa diset manual.
