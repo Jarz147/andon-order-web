@@ -62,9 +62,9 @@
   {
     "id": "mqtt-status",
     "type": "mqtt in",
-    "name": "Subscribe status andon b_#",
+    "name": "Subscribe status andon",
     "server": "andon-broker",
-    "topic": "b_#",
+    "topic": "b_1_mtc,b_1_qc,b_1_mat,b_2_mtc,b_2_qc,b_2_mat,b_3_mtc,b_3_qc,b_3_mat,b_4_mtc,b_4_qc,b_4_mat,b_5_mtc,b_5_qc,b_5_mat,b_6_mtc,b_6_qc,b_6_mat,b_7_mtc,b_7_qc,b_7_mat,b_8_mtc,b_8_qc,b_8_mat,b_9_mtc,b_9_qc,b_9_mat",
     "qos": "0",
     "datatype": "utf8",
     "x": 120,
